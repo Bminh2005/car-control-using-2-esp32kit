@@ -13,7 +13,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=c:\\Users\\binhm\\client_ES_Project\\build"
+    "--compile-commands-dir=c:\\Users\\binhm\\car-control-using-2-esp32kit\\sever_remote\\build"
   ],
   "idf.flashType": "UART"
 }
