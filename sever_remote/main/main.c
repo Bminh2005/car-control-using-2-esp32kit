@@ -14,6 +14,7 @@
 #include "esp_gap_bt_api.h"
 #include "esp_bt_device.h"
 #include "esp_spp_api.h"
+#include "../components/adc/adc_module.h"
 
 #define SPP_TAG "BT_SERVER_V5"
 #define SPP_SERVER_NAME "SPP_SERVER"
@@ -151,4 +152,5 @@ void app_main(void)
 
     // 7. Khởi tạo FreeRTOS Task
     xTaskCreate(bt_processing_task, "bt_processing_task", 4096, NULL, 5, NULL);
+    adc_module_init(); // Khởi tạo ADC Module
 }
