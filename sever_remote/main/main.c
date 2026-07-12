@@ -15,7 +15,7 @@
 #include "esp_bt_device.h"
 #include "esp_spp_api.h"
 #include "../components/adc/adc_module.h"
-
+#include "../protocol/my_protocol.h"
 #define SPP_TAG "BT_SERVER_V5"
 #define SPP_SERVER_NAME "SPP_SERVER"
 #define DEVICE_NAME "ESP32_Server_BT"
@@ -39,21 +39,38 @@ void bt_processing_task(void *pvParameters)
 {
     spp_data_t rx_data;
     ESP_LOGI(SPP_TAG, "Task xu ly cua Server da chay!");
+    QueueHandle_t queue = (QueueHandle_t)pvParameters; // Nhận Queue từ tham số
+    adc_data_t received_data;
+    char *task_name = pcTaskGetName(NULL);
+    if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY))
+    {
+        rx_data.data[rx_data.len] = '\0'; // Đảm bảo kết thúc chuỗi
+        ESP_LOGI(SPP_TAG, "Nhan duoc tu Client: %s", rx_data.data);
 
+        // Gửi phản hồi lại Client (nếu đang có kết nối)
+        if (spp_handle != 0)
+        {
+            char reply[64] = "Server xac nhan da nhan data!\n";
+            esp_spp_write(spp_handle, strlen(reply), (uint8_t *)reply);
+        }
+    }
     while (1)
     {
-        // Chờ nhận dữ liệu từ Queue
-        if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY))
-        {
-            rx_data.data[rx_data.len] = '\0'; // Đảm bảo kết thúc chuỗi
-            ESP_LOGI(SPP_TAG, "Nhan duoc tu Client: %s", rx_data.data);
 
-            // Gửi phản hồi lại Client (nếu đang có kết nối)
-            if (spp_handle != 0)
-            {
-                char reply[64] = "Server xac nhan da nhan data!\n";
-                esp_spp_write(spp_handle, strlen(reply), (uint8_t *)reply);
-            }
+        // Chờ nhận dữ liệu từ Queue
+
+        if (xQueueReceive(queue, &received_data, portMAX_DELAY) == pdPASS)
+        {
+
+            ESP_LOGI(task_name, "Nhan duoc tu ADC: X=%d, Y=%d, Z=%d",
+                     received_data.x_val, received_data.y_val, received_data.z_val);
+
+            // TẠI ĐÂY: Bạn gọi hàm esp_spp_write() để gửi dữ liệu qua Bluetooth
+            // esp_spp_write(handle, len, data);
+            packet_adc_t packet;
+            packet.msg_id = MSG_ID_ADC_DATA;
+            packet.data = received_data;
+            esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
         }
     }
 }
@@ -149,8 +166,9 @@ void app_main(void)
         .tx_buffer_size = 0,
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
-
+    QueueHandle_t main_adc_queue = xQueueCreate(10, sizeof(adc_data_t));
     // 7. Khởi tạo FreeRTOS Task
-    xTaskCreate(bt_processing_task, "bt_processing_task", 4096, NULL, 5, NULL);
-    adc_module_init(); // Khởi tạo ADC Module
+    // xTaskCreate(bt_processing_task, "bt_processing_task", 4096, NULL, 5, NULL);
+    xTaskCreatePinnedToCore(bt_processing_task, "BT_Task", 4096, (void *)main_adc_queue, 5, NULL, 1);
+    adc_module_init(main_adc_queue); // Khởi tạo ADC Module
 }

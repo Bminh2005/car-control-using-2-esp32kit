@@ -6,7 +6,7 @@
 #include "adc_module.h" // Include file header của chính nó
 
 static const char *TAG = "ADC_MODULE";
-
+static QueueHandle_t app_adc_queue = NULL;
 // 1. Task đọc ADC (Từ khóa 'static' giúp hàm này hoàn toàn tàng hình với các file khác)
 static void adc_read_task(void *pvParameters)
 {
@@ -40,30 +40,29 @@ static void adc_read_task(void *pvParameters)
         // x = (x >> 7);
         // y = (y >> 7);
         // z = (z >> 7);
-        x = (x * 100) / 4095; // Chuyển sang phần trăm
-        y = (y * 100) / 4095; // Chuyển sang phần trăm
-        z = (z * 100) / 4095; // Chuyển sang phần trăm
+        adc_data_t data_to_send;
+        data_to_send.x_val = (uint8_t)((x * 100) / 4095); // Chuyển sang phần trăm
+        data_to_send.y_val = (uint8_t)((y * 100) / 4095); // Chuyển sang phần trăm
+        data_to_send.z_val = (uint8_t)((z * 100) / 4095); // Chuyển sang phần trăm
         // Dùng ESP_LOGI thay cho printf để có màu sắc và kèm theo thời gian thực (timestamp)
-        ESP_LOGI(TAG, "X=%4d  Y=%4d  Z=%4d", x, y, z);
+        if (app_adc_queue != NULL)
+        {
+            if (xQueueSend(app_adc_queue, &data_to_send, pdMS_TO_TICKS(10)) != pdPASS)
+            {
+                ESP_LOGW(TAG, "Queue day! Chua kip xu ly du lieu ADC");
+            }
+        }
 
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 // 2. Hàm khởi tạo (Hàm này public ra bên ngoài)
-void adc_module_init(void)
+void adc_module_init(QueueHandle_t output_queue)
 {
-    ESP_LOGI(TAG, "Dang khoi tao ADC Module...");
+    ESP_LOGI(TAG, "Khởi tạo ADC Module...");
+    app_adc_queue = output_queue; // Lưu Queue lại để Task dùng
 
-    // Tự sinh ra Task
-    // Tham số cuối cùng '1' nghĩa là bắt buộc Task này chỉ được phép chạy trên Core 1 (CPU1)
-    xTaskCreatePinnedToCore(
-        adc_read_task,   // Hàm chạy
-        "ADC_Read_Task", // Tên
-        4096,            // Stack Size
-        NULL,            // Tham số
-        5,               // Priority
-        NULL,            // Task Handle
-        1                // <-- CORE ID: 1 là APP_CPU, 0 là PRO_CPU (Bluetooth đang dùng)
-    );
+    // Khóa Task này vào Core 1 để không làm phiền Core 0 (Bluetooth)
+    xTaskCreatePinnedToCore(adc_read_task, "ADC_Task", 4096, NULL, 5, NULL, 1);
 }

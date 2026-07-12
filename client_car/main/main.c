@@ -14,7 +14,8 @@
 #include "esp_gap_bt_api.h"
 #include "esp_bt_device.h"
 #include "esp_spp_api.h"
-
+#include "../protocol/my_protocol.h"
+#include "driver/gpio.h"
 #define SPP_TAG "BT_CLIENT_V5"
 
 // MAC Address của Server
@@ -29,6 +30,76 @@ typedef struct
     uint16_t len;
 } spp_data_t;
 
+void init_gpio(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_2) | (1ULL << GPIO_NUM_4) | (1ULL << GPIO_NUM_5), // Chọn chân GPIO_NUM_2 (sử dụng bitmask)
+        .mode = GPIO_MODE_OUTPUT,                                                           // Cấu hình làm ngõ ra
+        .pull_up_en = GPIO_PULLUP_DISABLE,                                                  // Không bật điện trở kéo lên
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,                                              // Không bật điện trở kéo xuống
+        .intr_type = GPIO_INTR_DISABLE                                                      // Tắt ngắt (interrupt) cho chân này
+    };
+    // Áp dụng cấu hình cấu trúc trên vào hệ thống
+    gpio_config(&io_conf);
+}
+void process_received_data(uint8_t *data_in, uint16_t len)
+{
+    if (len == 0)
+        return;
+
+    // Đọc byte đầu tiên (msg_id)
+    uint8_t id = data_in[0];
+
+    switch (id)
+    {
+    case MSG_ID_ADC_DATA:
+        // Nếu đúng kích thước
+        if (len == sizeof(packet_adc_t))
+        {
+            // Ép mảng byte thành struct ADC
+            packet_adc_t *adc_packet = (packet_adc_t *)data_in;
+            ESP_LOGI("RX", "Nhan ADC: X=%d, Y=%d, Z =%d", adc_packet->data.x_val, adc_packet->data.y_val, adc_packet->data.z_val);
+            if (adc_packet->data.x_val < 2)
+            {
+                gpio_set_level(GPIO_NUM_4, 1); // Bật LED
+            }
+            else
+            {
+                gpio_set_level(GPIO_NUM_4, 0); // Tắt LED
+            }
+            if (adc_packet->data.y_val < 2)
+            {
+                gpio_set_level(GPIO_NUM_2, 1); // Bật LED
+            }
+            else
+            {
+                gpio_set_level(GPIO_NUM_2, 0); // Tắt LED
+            }
+
+            if (adc_packet->data.z_val < 2)
+            {
+                gpio_set_level(GPIO_NUM_5, 1); // Bật LED
+            }
+            else
+            {
+                gpio_set_level(GPIO_NUM_5, 0); // Tắt LED
+            }
+        }
+        break;
+
+    case MSG_ID_TEXT_ACK:
+        // Ép mảng byte thành struct Text
+        packet_text_t *text_packet = (packet_text_t *)data_in;
+        // Đảm bảo kết thúc chuỗi an toàn
+        text_packet->text[sizeof(text_packet->text) - 1] = '\0';
+        ESP_LOGI("RX", "Nhan phan hoi: %s", text_packet->text);
+        break;
+
+    default:
+        ESP_LOGW("RX", "Goi tin khong xac dinh ID: 0x%02X", id);
+        break;
+    }
+}
 // --- TASK XỬ LÝ FREERTOS ---
 void bt_processing_task(void *pvParameters)
 {
@@ -37,10 +108,19 @@ void bt_processing_task(void *pvParameters)
 
     while (1)
     {
-        if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY))
+        // if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY))
+        // {
+        //     rx_data.data[rx_data.len] = '\0';
+        //     ESP_LOGI(SPP_TAG, "Nhan duoc tu Server: %s", rx_data.data);
+        // }
+        // Chờ vô thời hạn cho đến khi Callback đẩy dữ liệu vào Queue
+        if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY) == pdPASS)
         {
-            rx_data.data[rx_data.len] = '\0';
-            ESP_LOGI(SPP_TAG, "Nhan duoc tu Server: %s", rx_data.data);
+            // TUYỆT ĐỐI KHÔNG DÙNG: rx_data.data[rx_data.len] = '\0'; ở đây nữa
+            // Vì đây là dữ liệu nhị phân, việc thêm '\0' có thể làm hỏng data.
+
+            // Chuyền mảng byte thô và độ dài vào hàm giải mã
+            process_received_data(rx_data.data, rx_data.len);
         }
     }
 }
@@ -106,6 +186,7 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 
 void app_main(void)
 {
+    init_gpio();
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -139,6 +220,14 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
 
-    // 4. Chạy Task
-    xTaskCreate(bt_processing_task, "bt_processing_task", 4096, NULL, 5, NULL);
+    // 4. Chạy Task (Trói vào Core 1)
+    xTaskCreatePinnedToCore(
+        bt_processing_task,
+        "BT_Process",
+        4096,
+        NULL,
+        5,
+        NULL,
+        1 // <-- Chạy trên APP_CPU (Core 1)
+    );
 }
