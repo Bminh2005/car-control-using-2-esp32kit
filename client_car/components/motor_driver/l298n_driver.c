@@ -16,8 +16,8 @@ static const char *TAG = "ROBOT_ALL_COMMANDS";
 // Cấu hình chân GPIO nối Driver MX1508
 #define MOTOR_IN1_PIN 25 // PWM Bánh Trái
 #define MOTOR_IN2_PIN 26 // Hướng Bánh Trái
-#define MOTOR_IN3_PIN 32 // PWM Bánh Phải
-#define MOTOR_IN4_PIN 33 // Hướng Bánh Phải
+#define MOTOR_IN3_PIN 2  // PWM Bánh Phải
+#define MOTOR_IN4_PIN 4  // Hướng Bánh Phải
 
 // Cấu hình LEDC PWM
 #define LEDC_MODE LEDC_LOW_SPEED_MODE

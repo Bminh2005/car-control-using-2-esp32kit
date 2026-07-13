@@ -17,6 +17,8 @@
 #include "../protocol/my_protocol.h"
 #include "driver/gpio.h"
 #include "../components/motor_driver/l298n_driver.h"
+#include "../components/ultrasonic/ultrasonic_task.h"
+#include "../components/mpu_shock_module/mpu_shock_module.h"
 #define SPP_TAG "BT_CLIENT_V5"
 
 // MAC Address của Server
@@ -60,33 +62,8 @@ void process_received_data(uint8_t *data_in, uint16_t len)
             // Ép mảng byte thành struct ADC
             packet_adc_t *adc_packet = (packet_adc_t *)data_in;
             adc_data_t control_data = adc_packet->data; // Lấy dữ liệu điều khiển từ gói tin
-            ESP_LOGI("RX", "Nhan ADC: X=%d, Y=%d, Z =%d", adc_packet->data.x_val, adc_packet->data.y_val, adc_packet->data.z_val);
+            // ESP_LOGI("RX", "Nhan ADC: X=%d, Y=%d, Z =%d", adc_packet->data.x_val, adc_packet->data.y_val, adc_packet->data.z_val);
             xQueueSend(main_control_queue, &control_data, pdMS_TO_TICKS(10)); // Gửi dữ liệu vào Queue để xử lý trong task điều khiển động cơ
-            if (adc_packet->data.x_val < 2)
-            {
-                gpio_set_level(GPIO_NUM_4, 1); // Bật LED
-            }
-            else
-            {
-                gpio_set_level(GPIO_NUM_4, 0); // Tắt LED
-            }
-            if (adc_packet->data.y_val < 2)
-            {
-                gpio_set_level(GPIO_NUM_2, 1); // Bật LED
-            }
-            else
-            {
-                gpio_set_level(GPIO_NUM_2, 0); // Tắt LED
-            }
-
-            if (adc_packet->data.z_val < 2)
-            {
-                gpio_set_level(GPIO_NUM_5, 1); // Bật LED
-            }
-            else
-            {
-                gpio_set_level(GPIO_NUM_5, 0); // Tắt LED
-            }
         }
         break;
 
@@ -190,6 +167,8 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 void app_main(void)
 {
     init_gpio();
+    mpu_task_init();               // Khởi tạo Task đọc MPU6050
+    gpio_set_level(GPIO_NUM_2, 1); // Bật LED báo hiệu ESP32 đã khởi động xong
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -223,7 +202,11 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
     main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
+
     l298n_init(main_control_queue); // Truyền Queue vào hàm init của driver
+    // ultrasonic_task_init(5, 18, NULL); // Khởi tạo cảm biến siêu âm đầu xe (Trigger=5, Echo=18)
+    // ultrasonic_task_init(19, 21, NULL);
+
     // 4. Chạy Task (Trói vào Core 1)
     xTaskCreatePinnedToCore(
         bt_processing_task,
