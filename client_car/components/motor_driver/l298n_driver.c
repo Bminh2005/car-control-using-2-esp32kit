@@ -6,7 +6,7 @@
 #include "driver/uart.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
-
+#include "../../protocol/my_protocol.h"
 static const char *TAG = "ROBOT_ALL_COMMANDS";
 
 // Cấu hình UART giao tiếp PC
@@ -14,8 +14,8 @@ static const char *TAG = "ROBOT_ALL_COMMANDS";
 #define BUF_SIZE 1024
 
 // Cấu hình chân GPIO nối Driver MX1508
-#define MOTOR_IN1_PIN 34 // PWM Bánh Trái
-#define MOTOR_IN2_PIN 35 // Hướng Bánh Trái
+#define MOTOR_IN1_PIN 25 // PWM Bánh Trái
+#define MOTOR_IN2_PIN 26 // Hướng Bánh Trái
 #define MOTOR_IN3_PIN 32 // PWM Bánh Phải
 #define MOTOR_IN4_PIN 33 // Hướng Bánh Phải
 
@@ -115,7 +115,7 @@ void brake_robot()
 // TASK 2: Xử lý các trạng thái di chuyển dựa trên Queue nhận được
 void motor_control_task(void *pvParameters)
 {
-    char rx_cmd;
+    adc_data_t rx_cmd;
     uint32_t toc_do_chay = 180; // Tốc độ di chuyển tiến/lùi (0-255)
     uint32_t toc_do_xoay = 210; // Tốc độ xoay tại chỗ (nên để cao để thắng ma sát sàn)
 
@@ -124,9 +124,13 @@ void motor_control_task(void *pvParameters)
         // Đợi lệnh từ Queue vô hạn không tốn tài nguyên CPU ngầm
         if (xQueueReceive(command_queue, &rx_cmd, portMAX_DELAY) == pdPASS)
         {
-            switch (rx_cmd)
+            uint8_t x, y, z;
+            x = rx_cmd.x_val;
+            y = rx_cmd.y_val;
+            z = rx_cmd.z_val;
+            if (x - z > 0) // XE ĐI TIẾN
             {
-            case 'F': // XE ĐI TIẾN
+                toc_do_chay = (x - z) * 255 / 100; // Tốc độ tiến dựa trên chênh lệch x và z
                 ESP_LOGW(TAG, "MOTOR: Lệnh TIẾN");
                 gpio_set_level(MOTOR_IN2_PIN, 0);
                 gpio_set_level(MOTOR_IN4_PIN, 0);
@@ -134,9 +138,11 @@ void motor_control_task(void *pvParameters)
                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, toc_do_chay);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-                break;
+            }
 
-            case 'B': // XE ĐI LÙI
+            else if (z - x > 0) // XE ĐI LÙI
+            {
+                toc_do_chay = (z - x) * 255 / 100;
                 ESP_LOGW(TAG, "MOTOR: Lệnh LÙI");
                 gpio_set_level(MOTOR_IN2_PIN, 1);
                 gpio_set_level(MOTOR_IN4_PIN, 1);
@@ -144,14 +150,14 @@ void motor_control_task(void *pvParameters)
                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_chay);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-                break;
+            }
+            // case 'S': // XE DỪNG
+            //     ESP_LOGE(TAG, "MOTOR: Lệnh DỪNG");
+            //     brake_robot();
+            //     break;
 
-            case 'S': // XE DỪNG
-                ESP_LOGE(TAG, "MOTOR: Lệnh DỪNG");
-                brake_robot();
-                break;
-
-            case 'L': // XOAY TRÁI 90 ĐỘ TẠI CHỖ
+            if (y < 44)
+            { // XOAY TRÁI 90 ĐỘ TẠI CHỖ
                 ESP_LOGW(TAG, "MOTOR: Đang xoay Trái 90 độ...");
                 // Bánh trái LÙI, Bánh phải TIẾN
                 gpio_set_level(MOTOR_IN2_PIN, 1);
@@ -165,9 +171,10 @@ void motor_control_task(void *pvParameters)
                 vTaskDelay(pdMS_TO_TICKS(TIME_TURN_90_MS));
                 brake_robot();
                 ESP_LOGI(TAG, "MOTOR: Đã xoay xong Trái.");
-                break;
+            }
 
-            case 'R': // XOAY PHẢI 90 ĐỘ TẠI CHỖ
+            else if (y > 46)
+            { // XOAY PHẢI 90 ĐỘ TẠI CHỖ
                 ESP_LOGW(TAG, "MOTOR: Đang xoay Phải 90 độ...");
                 // Bánh trái TIẾN, Bánh phải LÙI
                 gpio_set_level(MOTOR_IN2_PIN, 0);
@@ -181,11 +188,6 @@ void motor_control_task(void *pvParameters)
                 vTaskDelay(pdMS_TO_TICKS(TIME_TURN_90_MS));
                 brake_robot();
                 ESP_LOGI(TAG, "MOTOR: Đã xoay xong Phải.");
-                break;
-
-            default:
-                ESP_LOGI(TAG, "MOTOR: Ký tự điều khiển không hợp lệ.");
-                break;
             }
         }
     }

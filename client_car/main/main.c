@@ -24,7 +24,7 @@ uint8_t server_mac[6] = {0x70, 0x4B, 0xCA, 0x5D, 0xE0, 0xA6};
 
 static uint32_t spp_handle = 0;
 static QueueHandle_t spp_data_queue = NULL;
-
+static QueueHandle_t main_control_queue = NULL; // Queue dùng chung giữa BT và Driver
 typedef struct
 {
     uint8_t data[128];
@@ -59,7 +59,9 @@ void process_received_data(uint8_t *data_in, uint16_t len)
         {
             // Ép mảng byte thành struct ADC
             packet_adc_t *adc_packet = (packet_adc_t *)data_in;
+            adc_data_t control_data = adc_packet->data; // Lấy dữ liệu điều khiển từ gói tin
             ESP_LOGI("RX", "Nhan ADC: X=%d, Y=%d, Z =%d", adc_packet->data.x_val, adc_packet->data.y_val, adc_packet->data.z_val);
+            xQueueSend(main_control_queue, &control_data, pdMS_TO_TICKS(10)); // Gửi dữ liệu vào Queue để xử lý trong task điều khiển động cơ
             if (adc_packet->data.x_val < 2)
             {
                 gpio_set_level(GPIO_NUM_4, 1); // Bật LED
@@ -220,7 +222,7 @@ void app_main(void)
         .tx_buffer_size = 0,
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
-    QueueHandle_t main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
+    main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
     l298n_init(main_control_queue); // Truyền Queue vào hàm init của driver
     // 4. Chạy Task (Trói vào Core 1)
     xTaskCreatePinnedToCore(
