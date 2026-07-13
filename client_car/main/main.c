@@ -16,6 +16,7 @@
 #include "esp_spp_api.h"
 #include "../protocol/my_protocol.h"
 #include "driver/gpio.h"
+#include "../components/motor_driver/l298n_driver.h"
 #define SPP_TAG "BT_CLIENT_V5"
 
 // MAC Address của Server
@@ -219,7 +220,8 @@ void app_main(void)
         .tx_buffer_size = 0,
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
-
+    QueueHandle_t main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
+    l298n_init(main_control_queue); // Truyền Queue vào hàm init của driver
     // 4. Chạy Task (Trói vào Core 1)
     xTaskCreatePinnedToCore(
         bt_processing_task,
