@@ -7,7 +7,7 @@
 #include <esp_err.h>
 #include <ultrasonic_task.h>
 #define MAX_DISTANCE_CM 500 // 5m max
-
+QueueHandle_t stop_now_queue = NULL;
 // 1. TASK ĐỌC CẢM BIẾN
 void ultrasonic_test(void *pvParameters)
 {
@@ -48,6 +48,19 @@ void ultrasonic_test(void *pvParameters)
         {
             // In ra khoảng cách kèm theo tên chân cắm để biết cảm biến nào đang đọc
             printf("[HC-SR04 | T:%d E:%d] Distance: %0.2f cm\n", t_pin, e_pin, distance * 100);
+            if (t_pin == 5)
+            {
+                if (distance < 0.15)
+                {
+                    uint8_t signal = 1;
+                    xQueueSend(stop_now_queue, &signal, pdMS_TO_TICKS(10));
+                }
+                else
+                {
+                    uint8_t signal = 0;
+                    xQueueSend(stop_now_queue, &signal, pdMS_TO_TICKS(10));
+                }
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -64,7 +77,7 @@ void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo, QueueHandle_t
         printf("Loi: Khong du RAM de khoi tao cam bien!\n");
         return;
     }
-
+    stop_now_queue = output_queue; // Gán Queue nhận lệnh dừng khẩn cấp từ main.c
     // Gán thông số chân cắm vào struct
     new_sensor->trigger_pin = gpio_trigger;
     new_sensor->echo_pin = gpio_echo;

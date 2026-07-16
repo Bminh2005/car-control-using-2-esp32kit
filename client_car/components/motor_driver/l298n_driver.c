@@ -16,8 +16,8 @@ static const char *TAG = "ROBOT_ALL_COMMANDS";
 // Cấu hình chân GPIO nối Driver MX1508
 #define MOTOR_IN1_PIN 25 // PWM Bánh Trái
 #define MOTOR_IN2_PIN 26 // Hướng Bánh Trái
-#define MOTOR_IN3_PIN 2  // PWM Bánh Phải
-#define MOTOR_IN4_PIN 4  // Hướng Bánh Phải
+#define MOTOR_IN3_PIN 27 // PWM Bánh Phải
+#define MOTOR_IN4_PIN 14 // Hướng Bánh Phải
 
 // Cấu hình LEDC PWM
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
@@ -29,7 +29,7 @@ static const char *TAG = "ROBOT_ALL_COMMANDS";
 #define TIME_TURN_90_MS 550
 
 QueueHandle_t command_queue = NULL;
-
+// static QueueHandle_t stop_now_queue = NULL; // Queue dùng chung giữa BT và Driver
 // Hàm khởi tạo cấu hình PWM và GPIO cho Motor
 void init_motors()
 {
@@ -117,8 +117,8 @@ void motor_control_task(void *pvParameters)
 {
     adc_data_t rx_cmd;
     uint32_t toc_do_chay = 180; // Tốc độ di chuyển tiến/lùi (0-255)
-    uint32_t toc_do_xoay = 210; // Tốc độ xoay tại chỗ (nên để cao để thắng ma sát sàn)
-
+    uint32_t toc_do_xoay = 255; // Tốc độ xoay tại chỗ (nên để cao để thắng ma sát sàn)
+    uint8_t stop_now = 0;
     while (1)
     {
         // Đợi lệnh từ Queue vô hạn không tốn tài nguyên CPU ngầm
@@ -128,66 +128,73 @@ void motor_control_task(void *pvParameters)
             x = rx_cmd.x_val;
             y = rx_cmd.y_val;
             z = rx_cmd.z_val;
-            if (x - z > 0) // XE ĐI TIẾN
-            {
-                toc_do_chay = (x - z) * 255 / 100; // Tốc độ tiến dựa trên chênh lệch x và z
-                ESP_LOGW(TAG, "MOTOR: Lệnh TIẾN");
-                gpio_set_level(MOTOR_IN2_PIN, 0);
-                gpio_set_level(MOTOR_IN4_PIN, 0);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, toc_do_chay);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, toc_do_chay);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-            }
+            printf("MOTOR: Nhận lệnh từ Queue: X=%d, Y=%d, Z=%d\n", x, y, z);
 
-            else if (z - x > 0) // XE ĐI LÙI
-            {
-                toc_do_chay = (z - x) * 255 / 100;
-                ESP_LOGW(TAG, "MOTOR: Lệnh LÙI");
-                gpio_set_level(MOTOR_IN2_PIN, 1);
-                gpio_set_level(MOTOR_IN4_PIN, 1);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255 - toc_do_chay);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_chay);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-            }
             // case 'S': // XE DỪNG
             //     ESP_LOGE(TAG, "MOTOR: Lệnh DỪNG");
             //     brake_robot();
             //     break;
 
-            if (y < 44)
+            if (z < 44)
             { // XOAY TRÁI 90 ĐỘ TẠI CHỖ
                 ESP_LOGW(TAG, "MOTOR: Đang xoay Trái 90 độ...");
                 // Bánh trái LÙI, Bánh phải TIẾN
                 gpio_set_level(MOTOR_IN2_PIN, 1);
                 gpio_set_level(MOTOR_IN4_PIN, 0);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255 - toc_do_xoay);
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255 - toc_do_xoay * 0);
                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, toc_do_xoay);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
 
                 // Chờ chạy hết thời gian xoay góc rồi tự phanh
-                vTaskDelay(pdMS_TO_TICKS(TIME_TURN_90_MS));
-                brake_robot();
+                // vTaskDelay(pdMS_TO_TICKS(TIME_TURN_90_MS));
+                // brake_robot();
                 ESP_LOGI(TAG, "MOTOR: Đã xoay xong Trái.");
             }
 
-            else if (y > 46)
+            else if (z > 47)
             { // XOAY PHẢI 90 ĐỘ TẠI CHỖ
                 ESP_LOGW(TAG, "MOTOR: Đang xoay Phải 90 độ...");
                 // Bánh trái TIẾN, Bánh phải LÙI
                 gpio_set_level(MOTOR_IN2_PIN, 0);
                 gpio_set_level(MOTOR_IN4_PIN, 1);
                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, toc_do_xoay);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_xoay);
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_xoay * 0);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-
-                // Chờ chạy hết thời gian xoay góc rồi tự phanh
-                vTaskDelay(pdMS_TO_TICKS(TIME_TURN_90_MS));
-                brake_robot();
+                // brake_robot();
                 ESP_LOGI(TAG, "MOTOR: Đã xoay xong Phải.");
+            }
+            else
+            {
+                if (x > 46) // XE ĐI TIẾN
+                {
+                    toc_do_chay = (x - 47) * 255 / 53; // Tốc độ tiến dựa trên chênh lệch x và z
+                    ESP_LOGW(TAG, "MOTOR: Lệnh TIẾN");
+                    gpio_set_level(MOTOR_IN2_PIN, 0);
+                    gpio_set_level(MOTOR_IN4_PIN, 0);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, toc_do_chay);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, toc_do_chay);
+                    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+                    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+                }
+
+                else if (x < 44) // XE ĐI LÙI
+                {
+                    toc_do_chay = (44 - x) * 255 / 44;
+                    ESP_LOGW(TAG, "MOTOR: Lệnh LÙI");
+                    gpio_set_level(MOTOR_IN2_PIN, 1);
+                    gpio_set_level(MOTOR_IN4_PIN, 1);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255 - toc_do_chay);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_chay);
+                    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+                    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+                }
+                else
+                {
+                    brake_robot(); // Nếu x nằm trong khoảng 44-46 thì dừng xe
+                }
+                // brake_robot(); // Nếu z nằm trong khoảng 44-46 thì dừng xe
             }
         }
     }
@@ -198,6 +205,7 @@ void l298n_init(QueueHandle_t command_queue_in)
     init_uart();
     init_motors();
     command_queue = command_queue_in;
+    // stop_now_queue = stop_queue; // Gán Queue nhận lệnh dừng khẩn cấp từ main.c
     // Tạo Queue chứa dữ liệu điều khiển
     // command_queue = xQueueCreate(10, sizeof(char));
 
@@ -205,7 +213,7 @@ void l298n_init(QueueHandle_t command_queue_in)
     {
         // Ghim cả 2 tác vụ hoạt động độc lập sang Core 1
         // xTaskCreatePinnedToCore(uart_rx_task, "uart_rx_task", 3072, NULL, 3, NULL, 1);
-        xTaskCreatePinnedToCore(motor_control_task, "motor_control_task", 3072, NULL, 2, NULL, 1);
+        xTaskCreatePinnedToCore(motor_control_task, "motor_control_task", 3072, NULL, 5, NULL, 1);
         // ESP_LOGI(TAG, "Hệ thống FreeRTOS tích hợp rẽ hướng đã khởi động xong!");
     }
 }

@@ -26,7 +26,8 @@ uint8_t server_mac[6] = {0x70, 0x4B, 0xCA, 0x5D, 0xE0, 0xA6};
 
 static uint32_t spp_handle = 0;
 static QueueHandle_t spp_data_queue = NULL;
-static QueueHandle_t main_control_queue = NULL; // Queue dùng chung giữa BT và Driver
+static QueueHandle_t main_control_queue = NULL;
+// static QueueHandle_t stop_now_queue = NULL;
 typedef struct
 {
     uint8_t data[128];
@@ -167,8 +168,8 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 void app_main(void)
 {
     init_gpio();
-    mpu_task_init();               // Khởi tạo Task đọc MPU6050
-    gpio_set_level(GPIO_NUM_2, 1); // Bật LED báo hiệu ESP32 đã khởi động xong
+    // mpu_task_init();               // Khởi tạo Task đọc MPU6050
+    // gpio_set_level(GPIO_NUM_2, 1); // Bật LED báo hiệu ESP32 đã khởi động xong
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -202,9 +203,9 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
     main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
-
+    // stop_now_queue = xQueueCreate(10, sizeof(uint8_t)); // Queue dùng chung giữa BT và Driver
     l298n_init(main_control_queue); // Truyền Queue vào hàm init của driver
-    // ultrasonic_task_init(5, 18, NULL); // Khởi tạo cảm biến siêu âm đầu xe (Trigger=5, Echo=18)
+    // ultrasonic_task_init(5, 18, stop_now_queue);        // Khởi tạo cảm biến siêu âm đầu xe (Trigger=5, Echo=18)
     // ultrasonic_task_init(19, 21, NULL);
 
     // 4. Chạy Task (Trói vào Core 1)
