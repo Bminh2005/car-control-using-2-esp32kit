@@ -37,11 +37,11 @@ typedef struct
 void init_gpio(void)
 {
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << GPIO_NUM_2) | (1ULL << GPIO_NUM_4) | (1ULL << GPIO_NUM_5), // Chọn chân GPIO_NUM_2 (sử dụng bitmask)
-        .mode = GPIO_MODE_OUTPUT,                                                           // Cấu hình làm ngõ ra
-        .pull_up_en = GPIO_PULLUP_DISABLE,                                                  // Không bật điện trở kéo lên
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,                                              // Không bật điện trở kéo xuống
-        .intr_type = GPIO_INTR_DISABLE                                                      // Tắt ngắt (interrupt) cho chân này
+        .pin_bit_mask = (1ULL << GPIO_NUM_2) | (1ULL << GPIO_NUM_4) | (1ULL << GPIO_NUM_5) | (1ULL << GPIO_NUM_32), // Chọn chân GPIO_NUM_2 (sử dụng bitmask)
+        .mode = GPIO_MODE_OUTPUT,                                                                                   // Cấu hình làm ngõ ra
+        .pull_up_en = GPIO_PULLUP_DISABLE,                                                                          // Không bật điện trở kéo lên
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,                                                                      // Không bật điện trở kéo xuống
+        .intr_type = GPIO_INTR_DISABLE                                                                              // Tắt ngắt (interrupt) cho chân này
     };
     // Áp dụng cấu hình cấu trúc trên vào hệ thống
     gpio_config(&io_conf);
@@ -74,7 +74,23 @@ void process_received_data(uint8_t *data_in, uint16_t len)
         text_packet->text[sizeof(text_packet->text) - 1] = '\0';
         ESP_LOGI("RX", "Nhan phan hoi: %s", text_packet->text);
         break;
-
+    case MSG_ID_HORN:
+        if (len == sizeof(packet_horn_t))
+        {
+            packet_horn_t *horn_packet = (packet_horn_t *)data_in;
+            uint8_t horn_state = horn_packet->on;
+            if (horn_state)
+            {
+                ESP_LOGI("RX", "Nhan phan hoi: %d", horn_state);
+                gpio_set_level(GPIO_NUM_32, 1); // Bật còi
+            }
+            else
+            {
+                ESP_LOGI("RX", "Nhan phan hoi: %d", horn_state);
+                gpio_set_level(GPIO_NUM_32, 0); // Tắt còi
+            }
+        }
+        break;
     default:
         ESP_LOGW("RX", "Goi tin khong xac dinh ID: 0x%02X", id);
         break;

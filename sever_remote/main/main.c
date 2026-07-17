@@ -88,6 +88,16 @@ static void IRAM_ATTR gpio_isr_handler(void *arg)
     }
 }
 
+static void horn_isr_handler(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    uint8_t pin_state = gpio_get_level(gpio_num);
+    packet_horn_t packet;
+    packet.msg_id = MSG_ID_HORN;
+    packet.on = pin_state; // Bật còi
+    esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
+}
+
 void process_received_data(uint8_t *data_in, uint16_t len)
 {
     if (len == 0)
@@ -299,7 +309,7 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 void init_gpio(void)
 {
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << GPIO_NUM_32) | (1ULL << GPIO_NUM_33),
+        .pin_bit_mask = (1ULL << GPIO_NUM_32) | (1ULL << GPIO_NUM_33) | (1ULL << GPIO_NUM_22),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE, // Bật kéo xuống mặc định mức 0
@@ -349,7 +359,7 @@ void app_main(void)
     init_gpio();
     gpio_isr_handler_add(GPIO_NUM_32, gpio_isr_handler, (void *)GPIO_NUM_32);
     gpio_isr_handler_add(GPIO_NUM_33, gpio_isr_handler, (void *)GPIO_NUM_33);
-
+    gpio_isr_handler_add(GPIO_NUM_22, horn_isr_handler, (void *)GPIO_NUM_22);
     // Khởi tạo NVS và Bluetooth (Giữ nguyên cấu trúc v5.x ổn định của bạn)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
