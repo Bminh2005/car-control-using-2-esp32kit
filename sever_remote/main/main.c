@@ -26,6 +26,7 @@
 
 // Tần suất gửi gói tin khi nhấn giữ nút (ví dụ: 50ms gửi một lần)
 #define BUTTON_SEND_PERIOD_MS 10
+static TaskHandle_t shock_task_handle = NULL;
 
 static uint32_t spp_handle = 0;
 static QueueHandle_t spp_data_queue = NULL;
@@ -98,12 +99,17 @@ void process_received_data(uint8_t *data_in, uint16_t len)
     switch (id)
     {
     case MSG_ID_SHOCK_EVENT:
-
+    {
         packet_shock_t *shock_packet = (packet_shock_t *)data_in;
-        ESP_LOGI("RX", "Nhan su kien shock: %s", shock_packet->is_shock ? "CO" : "KHONG");
-        is_shocking = shock_packet->is_shock; // Cập nhật trạng thái shock
-        break;
+        ESP_LOGI("RX", "Nhan su kien shock: %s", shock_packet->is_shock == 1 ? "CO" : "KHONG");
 
+        // Nếu có sự kiện shock và shock_task đã được tạo thành công
+        if (shock_packet->is_shock == 1 && shock_task_handle != NULL)
+        {
+            xTaskNotifyGive(shock_task_handle); // Đánh thức shock_task ngay lập tức
+        }
+        break;
+    }
     case MSG_ID_TEXT_ACK:
         // Ép mảng byte thành struct Text
         packet_text_t *text_packet = (packet_text_t *)data_in;
@@ -120,16 +126,19 @@ void process_received_data(uint8_t *data_in, uint16_t len)
 
 void shock_task(void *pvParameters)
 {
+    // Đảm bảo chân GPIO2 được khởi tạo ở mức thấp ban đầu
+    gpio_set_level(GPIO_NUM_5, 0);
+
     while (1)
     {
-        if (is_shocking)
-        {
-            is_shocking = 0;                 // Reset cờ sau khi xử lý
-            gpio_set_level(GPIO_NUM_2, 1);   // Bật chân GPIO2
-            vTaskDelay(pdMS_TO_TICKS(1000)); // Giữ 1000ms
-            gpio_set_level(GPIO_NUM_2, 0);
-        }
-        vTaskDelay(pdMS_TO_TICKS(20));
+        // Chờ thông báo từ task nhận dữ liệu (block vô hạn, không tốn CPU)
+        // pdTRUE: Reset giá trị notification về 0 sau khi nhận được
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        ESP_LOGI("SHOCK", "Kích hoạt SHOCK trong 1000ms...");
+        gpio_set_level(GPIO_NUM_5, 1);   // Bật chân GPIO2
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Giữ trong 1s
+        gpio_set_level(GPIO_NUM_5, 0);   // Tắt chân GPIO2
     }
 }
 // --------------------------------------------------------
@@ -158,6 +167,11 @@ void bt_processing_task(void *pvParameters)
 
     while (1)
     {
+        if (xQueueReceive(spp_data_queue, &rx_data, 0) == pdPASS)
+        {
+            // Gọi hàm xử lý gói tin và kích hoạt shock nếu cần
+            process_received_data(rx_data.data, rx_data.len);
+        }
         // ==========================================
         // QUÉT NGẮT NÚT BẤM (CẢ NHẤN VÀ NHẢ)
         // ==========================================
@@ -206,7 +220,7 @@ void bt_processing_task(void *pvParameters)
             {
                 uint8_t x = received_data.x_val;
                 uint8_t y = received_data.y_val;
-                printf("X: %d, Y: %d\n", x, y);
+                // printf("X: %d, Y: %d\n", x, y);
                 packet_control_data_t packet;
                 packet.msg_id = MSG_ID_CONTROL_DATA;
 
@@ -292,6 +306,17 @@ void init_gpio(void)
         .intr_type = GPIO_INTR_ANYEDGE        // QUAN TRỌNG: Ngắt ở CẢ 2 CẠNH (Nhấn lên 1 ngắt, Nhả xuống 0 ngắt)
     };
     gpio_config(&io_conf);
+
+    gpio_config_t io_conf_output = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_5),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&io_conf_output);
+
+    // Đặt trạng thái ban đầu của GPIO2 về 0 (Tắt bộ rung/LED)
+    gpio_set_level(GPIO_NUM_5, 0);
 }
 
 // --------------------------------------------------------
@@ -325,9 +350,6 @@ void app_main(void)
     gpio_isr_handler_add(GPIO_NUM_32, gpio_isr_handler, (void *)GPIO_NUM_32);
     gpio_isr_handler_add(GPIO_NUM_33, gpio_isr_handler, (void *)GPIO_NUM_33);
 
-    gpio_reset_pin(GPIO_NUM_2); // Reset chân về trạng thái mặc định trước
-    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
-
     // Khởi tạo NVS và Bluetooth (Giữ nguyên cấu trúc v5.x ổn định của bạn)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -358,6 +380,7 @@ void app_main(void)
 
     QueueHandle_t main_adc_queue = xQueueCreate(10, sizeof(adc_data_t));
     xTaskCreatePinnedToCore(bt_processing_task, "BT_Task", 4096, (void *)main_adc_queue, 5, NULL, 1);
-    xTaskCreatePinnedToCore(shock_task, "shock_Task", 1024, NULL, 5, NULL, 1);
+    // Thay đổi dòng tạo task shock trong app_main thành:
+    xTaskCreatePinnedToCore(shock_task, "shock_Task", 2048, NULL, 5, &shock_task_handle, 1);
     adc_module_init(main_adc_queue);
 }

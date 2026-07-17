@@ -20,7 +20,6 @@
 #include "../components/ultrasonic/ultrasonic_task.h"
 #include "../components/mpu_shock_module/mpu_shock_module.h"
 #define SPP_TAG "BT_CLIENT_V5"
-
 // MAC Address của Server
 uint8_t server_mac[6] = {0x70, 0x4B, 0xCA, 0x5D, 0xE0, 0xA6};
 uint8_t stop_now = 0;
@@ -106,12 +105,21 @@ void bt_processing_task(void *pvParameters)
         uint8_t shock_value;
         if (xQueueReceive(xShockQueue, &shock_value, 0) == pdPASS)
         {
-            if (shock_value == 1)
+            if (shock_value == 111)
             {
                 packet_shock_t shock_packet;
                 shock_packet.msg_id = MSG_ID_SHOCK_EVENT;
                 shock_packet.is_shock = 1;
-                esp_spp_write(spp_handle, sizeof(shock_packet), (uint8_t *)&shock_packet);
+                // Gửi gói tin về Server ngay lập tức
+                esp_err_t err = esp_spp_write(spp_handle, sizeof(shock_packet), (uint8_t *)&shock_packet);
+                if (err == ESP_OK)
+                {
+                    ESP_LOGW(SPP_TAG, "--- DA GUI GOI TIN: SHOCK EVENT ve Server! ---");
+                }
+                else
+                {
+                    ESP_LOGE(SPP_TAG, "Gui goi tin SHOCK that bai! Error: %d", err);
+                }
                 ESP_LOGW(SPP_TAG, "Goi tin: SHOCK EVENT!");
             }
         }

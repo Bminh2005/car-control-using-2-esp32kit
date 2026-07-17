@@ -40,7 +40,6 @@ void mpu_shock_task(void *pvParameters)
             if (fabs(linear_z) > SHOCK_THRESHOLD)
             {
                 ESP_LOGW(TAG, "--- PHAT HIEN RUNG XOC! Z: %.2f g ---", linear_z);
-                ESP_LOGW(TAG, "--- PHAT HIEN RUNG XOC! Z: %.2f g ---", linear_z);
 
                 uint8_t event = 111; // Giá trị bất kỳ để báo hiệu rung xóc
 
