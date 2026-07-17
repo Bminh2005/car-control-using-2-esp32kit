@@ -35,6 +35,6 @@ typedef struct
  * @param output_queue (Tùy chọn) Queue để Task tự động nhét kết quả đo được vào.
  * Truyền NULL nếu bạn chỉ muốn in ra Serial Monitor để test.
  */
-void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo, QueueHandle_t output_queue);
+void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo);
 void ultrasonic_test(void *pvParameters);
 #endif // ULTRASONIC_MODULE_H

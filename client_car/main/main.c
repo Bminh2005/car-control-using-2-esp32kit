@@ -23,10 +23,11 @@
 
 // MAC Address của Server
 uint8_t server_mac[6] = {0x70, 0x4B, 0xCA, 0x5D, 0xE0, 0xA6};
-
+uint8_t stop_now = 0;
 static uint32_t spp_handle = 0;
 static QueueHandle_t spp_data_queue = NULL;
 static QueueHandle_t main_control_queue = NULL;
+static QueueHandle_t xShockQueue = NULL; // Queue dùng chung giữa MPU và Task chính
 // static QueueHandle_t stop_now_queue = NULL;
 typedef struct
 {
@@ -56,15 +57,14 @@ void process_received_data(uint8_t *data_in, uint16_t len)
 
     switch (id)
     {
-    case MSG_ID_ADC_DATA:
+    case MSG_ID_CONTROL_DATA:
         // Nếu đúng kích thước
-        if (len == sizeof(packet_adc_t))
+        if (len == sizeof(packet_control_data_t))
         {
             // Ép mảng byte thành struct ADC
-            packet_adc_t *adc_packet = (packet_adc_t *)data_in;
-            adc_data_t control_data = adc_packet->data; // Lấy dữ liệu điều khiển từ gói tin
+            packet_control_data_t *control_packet = (packet_control_data_t *)data_in;
             // ESP_LOGI("RX", "Nhan ADC: X=%d, Y=%d, Z =%d", adc_packet->data.x_val, adc_packet->data.y_val, adc_packet->data.z_val);
-            xQueueSend(main_control_queue, &control_data, pdMS_TO_TICKS(10)); // Gửi dữ liệu vào Queue để xử lý trong task điều khiển động cơ
+            xQueueSend(main_control_queue, control_packet, pdMS_TO_TICKS(10)); // Gửi dữ liệu vào Queue để xử lý trong task điều khiển động cơ
         }
         break;
 
@@ -102,6 +102,18 @@ void bt_processing_task(void *pvParameters)
 
             // Chuyền mảng byte thô và độ dài vào hàm giải mã
             process_received_data(rx_data.data, rx_data.len);
+        }
+        uint8_t shock_value;
+        if (xQueueReceive(xShockQueue, &shock_value, 0) == pdPASS)
+        {
+            if (shock_value == 1)
+            {
+                packet_shock_t shock_packet;
+                shock_packet.msg_id = MSG_ID_SHOCK_EVENT;
+                shock_packet.is_shock = 1;
+                esp_spp_write(spp_handle, sizeof(shock_packet), (uint8_t *)&shock_packet);
+                ESP_LOGW(SPP_TAG, "Goi tin: SHOCK EVENT!");
+            }
         }
     }
 }
@@ -168,7 +180,8 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 void app_main(void)
 {
     init_gpio();
-    // mpu_task_init();               // Khởi tạo Task đọc MPU6050
+    xShockQueue = xQueueCreate(10, sizeof(uint8_t)); // Tạo Queue dùng chung giữa MPU và Task chính
+    mpu_task_init(xShockQueue);                      // Khởi tạo Task đọc MPU6050
     // gpio_set_level(GPIO_NUM_2, 1); // Bật LED báo hiệu ESP32 đã khởi động xong
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -202,12 +215,11 @@ void app_main(void)
         .tx_buffer_size = 0,
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
-    main_control_queue = xQueueCreate(10, sizeof(adc_data_t));
+    main_control_queue = xQueueCreate(10, sizeof(packet_control_data_t));
     // stop_now_queue = xQueueCreate(10, sizeof(uint8_t)); // Queue dùng chung giữa BT và Driver
     l298n_init(main_control_queue); // Truyền Queue vào hàm init của driver
-    // ultrasonic_task_init(5, 18, stop_now_queue);        // Khởi tạo cảm biến siêu âm đầu xe (Trigger=5, Echo=18)
+    ultrasonic_task_init(5, 18);    // Khởi tạo cảm biến siêu âm đầu xe (Trigger=5, Echo=18)
     // ultrasonic_task_init(19, 21, NULL);
-
     // 4. Chạy Task (Trói vào Core 1)
     xTaskCreatePinnedToCore(
         bt_processing_task,

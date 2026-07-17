@@ -18,7 +18,7 @@ static const char *TAG = "SHOCK_MODULE";
 void mpu_shock_task(void *pvParameters)
 {
     mpu6050_dev_t dev = {0};
-
+    QueueHandle_t xShockQueue = (QueueHandle_t)pvParameters;
     // Khởi tạo thiết bị
     ESP_ERROR_CHECK(mpu6050_init_desc(&dev, ADDR, 0, SDA_PIN, SCL_PIN));
     ESP_ERROR_CHECK(mpu6050_init(&dev));
@@ -40,7 +40,18 @@ void mpu_shock_task(void *pvParameters)
             if (fabs(linear_z) > SHOCK_THRESHOLD)
             {
                 ESP_LOGW(TAG, "--- PHAT HIEN RUNG XOC! Z: %.2f g ---", linear_z);
+                ESP_LOGW(TAG, "--- PHAT HIEN RUNG XOC! Z: %.2f g ---", linear_z);
 
+                uint8_t event = 111; // Giá trị bất kỳ để báo hiệu rung xóc
+
+                // Gửi dữ liệu vào Queue (không đợi nếu Queue đầy - xTicksToWait = 0)
+                if (xShockQueue != NULL)
+                {
+                    if (xQueueSend(xShockQueue, &event, 0) != pdPASS)
+                    {
+                        ESP_LOGE(TAG, "Queue day, mat du lieu rung xoc!");
+                    }
+                }
                 // Tránh log liên tục trong 500ms
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
@@ -50,9 +61,9 @@ void mpu_shock_task(void *pvParameters)
     }
 }
 
-void mpu_task_init(void)
+void mpu_task_init(QueueHandle_t xShockQueue)
 {
     ESP_ERROR_CHECK(i2cdev_init());
     // Đảm bảo i2cdev đã khởi tạo trong main.c
-    xTaskCreate(mpu_shock_task, "mpu_shock_task", 4096, NULL, 5, NULL);
+    xTaskCreate(mpu_shock_task, "mpu_shock_task", 4096, (void *)xShockQueue, 6, NULL);
 }

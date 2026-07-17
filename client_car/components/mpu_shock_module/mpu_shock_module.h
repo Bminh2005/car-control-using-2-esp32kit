@@ -11,7 +11,7 @@ extern "C"
      * @brief Khởi tạo giao tiếp I2C và Task chạy ngầm cho MPU6050
      * Gọi hàm này 1 lần duy nhất trong app_main()
      */
-    void mpu_task_init(void);
+    void mpu_task_init(QueueHandle_t xShockQueue);
 
 #ifdef __cplusplus
 }

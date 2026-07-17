@@ -9,7 +9,6 @@ typedef struct
 {
     uint8_t x_val;
     uint8_t y_val;
-    uint8_t z_val;
 } adc_data_t;
 
 // 2. Cập nhật hàm init: Nhận vào một QueueHandle_t

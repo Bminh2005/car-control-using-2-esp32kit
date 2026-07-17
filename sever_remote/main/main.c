@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/timers.h" // Thêm thư viện quản lý Timer của FreeRTOS
 #include "esp_log.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
@@ -16,16 +17,24 @@
 #include "esp_spp_api.h"
 #include "../components/adc/adc_module.h"
 #include "../protocol/my_protocol.h"
+#include "driver/gpio.h"
+
 #define SPP_TAG "BT_SERVER_V5"
 #define SPP_SERVER_NAME "SPP_SERVER"
 #define DEVICE_NAME "ESP32_Server_BT"
+#define ESP_INTR_FLAG_DEFAULT 0
 
-// Handle của kết nối SPP để gửi data đi
+// Tần suất gửi gói tin khi nhấn giữ nút (ví dụ: 50ms gửi một lần)
+#define BUTTON_SEND_PERIOD_MS 10
+
 static uint32_t spp_handle = 0;
-// Queue để giao tiếp giữa BT Callback và FreeRTOS Task
 static QueueHandle_t spp_data_queue = NULL;
+static QueueHandle_t gpio_evt_queue = NULL;
 
-// Cấu trúc dữ liệu nhét vào Queue
+// Định nghĩa Timer điều khiển gửi nút bấm liên tục
+static TimerHandle_t btn_32_timer = NULL;
+static TimerHandle_t btn_33_timer = NULL;
+static uint8_t is_shocking = 0; // Biến cờ để kiểm tra trạng thái shock
 typedef struct
 {
     uint8_t data[128];
@@ -33,50 +42,201 @@ typedef struct
 } spp_data_t;
 
 // --------------------------------------------------------
-// 1. FREERTOS TASK: Xử lý và Phản hồi
+// 1. TIMER CALLBACKS: Tự động bắn dữ liệu định kỳ khi giữ nút
+// --------------------------------------------------------
+static void btn_32_timer_callback(TimerHandle_t xTimer)
+{
+    if (spp_handle != 0)
+    {
+        packet_control_data_t packet;
+        packet.msg_id = MSG_ID_CONTROL_DATA;
+        packet.direction = 4; // Xoay Phai
+        packet.speed = 0;
+        esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
+        ESP_LOGD(SPP_TAG, "Timer 32: Dang gui lenh HUONG 3...");
+    }
+}
+
+static void btn_33_timer_callback(TimerHandle_t xTimer)
+{
+    if (spp_handle != 0)
+    {
+        packet_control_data_t packet;
+        packet.msg_id = MSG_ID_CONTROL_DATA;
+        packet.direction = 3; // Xoay trai
+        packet.speed = 0;
+        esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
+        ESP_LOGD(SPP_TAG, "Timer 33: Dang gui lenh HUONG 4...");
+    }
+}
+
+// --------------------------------------------------------
+// 2. INTERRUPT HANDLER: Bắt sự kiện Nhấn xuống / Thả ra
+// --------------------------------------------------------
+static void IRAM_ATTR gpio_isr_handler(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Đẩy trạng thái thay đổi chân vào Queue để Task xử lý (tránh xử lý logic trong ISR)
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, &xHigherPriorityTaskWoken);
+
+    if (xHigherPriorityTaskWoken)
+    {
+        portYIELD_FROM_ISR();
+    }
+}
+
+void process_received_data(uint8_t *data_in, uint16_t len)
+{
+    if (len == 0)
+        return;
+
+    // Đọc byte đầu tiên (msg_id)
+    uint8_t id = data_in[0];
+
+    switch (id)
+    {
+    case MSG_ID_SHOCK_EVENT:
+
+        packet_shock_t *shock_packet = (packet_shock_t *)data_in;
+        ESP_LOGI("RX", "Nhan su kien shock: %s", shock_packet->is_shock ? "CO" : "KHONG");
+        is_shocking = shock_packet->is_shock; // Cập nhật trạng thái shock
+        break;
+
+    case MSG_ID_TEXT_ACK:
+        // Ép mảng byte thành struct Text
+        packet_text_t *text_packet = (packet_text_t *)data_in;
+        // Đảm bảo kết thúc chuỗi an toàn
+        text_packet->text[sizeof(text_packet->text) - 1] = '\0';
+        ESP_LOGI("RX", "Nhan phan hoi: %s", text_packet->text);
+        break;
+
+    default:
+        ESP_LOGW("RX", "Goi tin khong xac dinh ID: 0x%02X", id);
+        break;
+    }
+}
+
+void shock_task(void *pvParameters)
+{
+    while (1)
+    {
+        if (is_shocking)
+        {
+            is_shocking = 0;                 // Reset cờ sau khi xử lý
+            gpio_set_level(GPIO_NUM_2, 1);   // Bật chân GPIO2
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Giữ 1000ms
+            gpio_set_level(GPIO_NUM_2, 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+// --------------------------------------------------------
+// 3. FREERTOS TASK: Xử lý sự kiện nút bấm & Đọc ADC
 // --------------------------------------------------------
 void bt_processing_task(void *pvParameters)
 {
     spp_data_t rx_data;
     ESP_LOGI(SPP_TAG, "Task xu ly cua Server da chay!");
-    QueueHandle_t queue = (QueueHandle_t)pvParameters; // Nhận Queue từ tham số
+    QueueHandle_t queue = (QueueHandle_t)pvParameters; // Nhận Queue ADC từ tham số
     adc_data_t received_data;
+    uint32_t btn_pin;
     char *task_name = pcTaskGetName(NULL);
-    if (xQueueReceive(spp_data_queue, &rx_data, portMAX_DELAY))
-    {
-        rx_data.data[rx_data.len] = '\0'; // Đảm bảo kết thúc chuỗi
-        ESP_LOGI(SPP_TAG, "Nhan duoc tu Client: %s", rx_data.data);
 
-        // Gửi phản hồi lại Client (nếu đang có kết nối)
+    // Xử lý gói tin nhận được từ Client ban đầu (nếu có)
+    if (xQueueReceive(spp_data_queue, &rx_data, 0))
+    {
+        rx_data.data[rx_data.len] = '\0';
+        ESP_LOGI(SPP_TAG, "Nhan duoc tu Client: %s", rx_data.data);
         if (spp_handle != 0)
         {
             char reply[64] = "Server xac nhan da nhan data!\n";
             esp_spp_write(spp_handle, strlen(reply), (uint8_t *)reply);
         }
     }
+
     while (1)
     {
-
-        // Chờ nhận dữ liệu từ Queue
-
-        if (xQueueReceive(queue, &received_data, portMAX_DELAY) == pdPASS)
+        // ==========================================
+        // QUÉT NGẮT NÚT BẤM (CẢ NHẤN VÀ NHẢ)
+        // ==========================================
+        while (xQueueReceive(gpio_evt_queue, &btn_pin, 0) == pdPASS)
         {
+            // Đọc trạng thái vật lý tức thời của chân GPIO ngay khi xảy ra ngắt
+            int pin_state = gpio_get_level(btn_pin);
 
-            ESP_LOGI(task_name, "Nhan duoc tu ADC: X=%d, Y=%d, Z=%d",
-                     received_data.x_val, received_data.y_val, received_data.z_val);
+            if (btn_pin == GPIO_NUM_32)
+            {
+                if (pin_state == 1) // Nút 32 ĐƯỢC NHẤN XUỐNG (Pull-down vọt lên 1)
+                {
+                    ESP_LOGI(task_name, "[NUT 32] -> NHẤN GIỮ");
+                    // Kích hoạt Timer gửi liên tục của chân 32
+                    xTimerStart(btn_32_timer, 0);
+                }
+                else // Nút 32 ĐƯỢC NHẢ RA (Quay về 0)
+                {
+                    ESP_LOGI(task_name, "[NUT 32] -> NHẢ");
+                    // Dừng ngay lập tức Timer của chân 32
+                    xTimerStop(btn_32_timer, 0);
+                }
+            }
+            else if (btn_pin == GPIO_NUM_33)
+            {
+                if (pin_state == 1) // Nút 33 ĐƯỢC NHẤN XUỐNG
+                {
+                    ESP_LOGI(task_name, "[NUT 33] -> NHẤN GIỮ");
+                    xTimerStart(btn_33_timer, 0);
+                }
+                else // Nút 33 ĐƯỢC NHẢ RA
+                {
+                    ESP_LOGI(task_name, "[NUT 33] -> NHẢ");
+                    xTimerStop(btn_33_timer, 0);
+                }
+            }
+        }
 
-            // TẠI ĐÂY: Bạn gọi hàm esp_spp_write() để gửi dữ liệu qua Bluetooth
-            // esp_spp_write(handle, len, data);
-            packet_adc_t packet;
-            packet.msg_id = MSG_ID_ADC_DATA;
-            packet.data = received_data;
-            esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
+        // ==========================================
+        // ĐỌC DỮ LIỆU TỪ ADC (CHỈ ĐỌC KHI KHÔNG GIỮ NÚT)
+        // ==========================================
+        if (xQueueReceive(queue, &received_data, pdMS_TO_TICKS(10)) == pdPASS)
+        {
+            // Chỉ gửi dữ liệu ADC nếu cả hai Timer nút bấm đều đang DỪNG (không bị giữ nút bấm đè lên)
+            if (xTimerIsTimerActive(btn_32_timer) == pdFALSE && xTimerIsTimerActive(btn_33_timer) == pdFALSE)
+            {
+                uint8_t x = received_data.x_val;
+                uint8_t y = received_data.y_val;
+                printf("X: %d, Y: %d\n", x, y);
+                packet_control_data_t packet;
+                packet.msg_id = MSG_ID_CONTROL_DATA;
+
+                if (x > y + 2)
+                {
+                    packet.direction = 1; // Tiến
+                    packet.speed = 255 * (x - y) / (100 - y);
+                }
+                else if (x < y - 2)
+                {
+                    packet.direction = 2; // Lùi
+                    packet.speed = 255 * (y - x) / (100 - x);
+                }
+                else
+                {
+                    packet.direction = 0; // Dừng xe
+                    packet.speed = 0;
+                }
+
+                if (spp_handle != 0)
+                {
+                    esp_spp_write(spp_handle, sizeof(packet), (uint8_t *)&packet);
+                }
+            }
         }
     }
 }
 
 // --------------------------------------------------------
-// 2. BLUETOOTH CALLBACK: Hứng sự kiện
+// 4. BLUETOOTH CALLBACK (Giữ nguyên)
 // --------------------------------------------------------
 static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
@@ -89,9 +249,7 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
             esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
         }
         break;
-
     case ESP_SPP_START_EVT:
-        // Khi Server đã start xong, ta mới đổi tên và cho phép thiết bị khác quét thấy
         if (param->start.status == ESP_SPP_SUCCESS)
         {
             ESP_LOGI(SPP_TAG, "Server da bat! Dang phat song Bluetooth...");
@@ -99,20 +257,18 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
             esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         }
         break;
-
     case ESP_SPP_SRV_OPEN_EVT:
-        // Sự kiện này xảy ra khi có một Client kết nối thành công tới Server
         ESP_LOGI(SPP_TAG, "Client da ket noi toi Server!");
-        spp_handle = param->srv_open.handle; // Lưu handle để gửi data lại
+        spp_handle = param->srv_open.handle;
         break;
-
     case ESP_SPP_CLOSE_EVT:
         ESP_LOGI(SPP_TAG, "Client da ngat ket noi");
         spp_handle = 0;
+        // Dừng khẩn cấp các timer nếu client mất kết nối khi đang giữ nút
+        xTimerStop(btn_32_timer, 0);
+        xTimerStop(btn_33_timer, 0);
         break;
-
     case ESP_SPP_DATA_IND_EVT:
-        // SỰ KIỆN NHẬN DỮ LIỆU -> Bắn vào FreeRTOS Queue
         if (param->data_ind.len < 128)
         {
             spp_data_t tx_data;
@@ -121,18 +277,58 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
             xQueueSend(spp_data_queue, &tx_data, pdMS_TO_TICKS(10));
         }
         break;
-
     default:
         break;
     }
 }
 
+void init_gpio(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_32) | (1ULL << GPIO_NUM_33),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE, // Bật kéo xuống mặc định mức 0
+        .intr_type = GPIO_INTR_ANYEDGE        // QUAN TRỌNG: Ngắt ở CẢ 2 CẠNH (Nhấn lên 1 ngắt, Nhả xuống 0 ngắt)
+    };
+    gpio_config(&io_conf);
+}
+
 // --------------------------------------------------------
-// 3. HÀM MAIN: Khởi tạo toàn bộ (Chuẩn v5.5)
+// 5. HÀM MAIN: Khởi tạo toàn bộ
 // --------------------------------------------------------
 void app_main(void)
 {
-    // 1. Khởi tạo bộ nhớ NVS
+    // Tạo Queue nhận ngắt nút nhấn
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    if (gpio_evt_queue == NULL)
+    {
+        ESP_LOGE(SPP_TAG, "Khong the khoi tao gpio_evt_queue!");
+        return;
+    }
+
+    // Khởi tạo các phần mềm Software Timers cho 2 nút bấm
+    btn_32_timer = xTimerCreate("Btn_32_Timer", pdMS_TO_TICKS(BUTTON_SEND_PERIOD_MS), pdTRUE, (void *)0, btn_32_timer_callback);
+    btn_33_timer = xTimerCreate("Btn_33_Timer", pdMS_TO_TICKS(BUTTON_SEND_PERIOD_MS), pdTRUE, (void *)1, btn_33_timer_callback);
+
+    if (btn_32_timer == NULL || btn_33_timer == NULL)
+    {
+        ESP_LOGE(SPP_TAG, "Khong the tao FreeRTOS Timers!");
+        return;
+    }
+
+    // Cài đặt dịch vụ ngắt GPIO
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+
+    // Cấu hình GPIO và đăng ký ISR cho từng chân
+    init_gpio();
+    gpio_isr_handler_add(GPIO_NUM_32, gpio_isr_handler, (void *)GPIO_NUM_32);
+    gpio_isr_handler_add(GPIO_NUM_33, gpio_isr_handler, (void *)GPIO_NUM_33);
+
+    gpio_reset_pin(GPIO_NUM_2); // Reset chân về trạng thái mặc định trước
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
+
+    // Khởi tạo NVS và Bluetooth (Giữ nguyên cấu trúc v5.x ổn định của bạn)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -141,23 +337,16 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. Giải phóng RAM của BLE (Chỉ dùng Classic BT)
-    // ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
-
-    // 3. Tạo FreeRTOS Queue
     spp_data_queue = xQueueCreate(10, sizeof(spp_data_t));
 
-    // 4. Khởi tạo Controller
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BTDM)); // Dùng Dual Mode để có thể dùng cả Classic BT và BLE
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BTDM));
 
-    // 5. Khởi tạo Bluedroid (Dùng struct cho v5.x)
     esp_bluedroid_config_t bluedroid_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bluedroid_init_with_cfg(&bluedroid_cfg));
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
-    // 6. Khởi tạo SPP (Dùng struct cho v5.x)
     ESP_ERROR_CHECK(esp_spp_register_callback(esp_spp_cb));
 
     esp_spp_cfg_t bt_spp_cfg = {
@@ -166,9 +355,9 @@ void app_main(void)
         .tx_buffer_size = 0,
     };
     ESP_ERROR_CHECK(esp_spp_enhanced_init(&bt_spp_cfg));
+
     QueueHandle_t main_adc_queue = xQueueCreate(10, sizeof(adc_data_t));
-    // 7. Khởi tạo FreeRTOS Task
-    // xTaskCreate(bt_processing_task, "bt_processing_task", 4096, NULL, 5, NULL);
     xTaskCreatePinnedToCore(bt_processing_task, "BT_Task", 4096, (void *)main_adc_queue, 5, NULL, 1);
-    adc_module_init(main_adc_queue); // Khởi tạo ADC Module
+    xTaskCreatePinnedToCore(shock_task, "shock_Task", 1024, NULL, 5, NULL, 1);
+    adc_module_init(main_adc_queue);
 }

@@ -7,7 +7,8 @@
 #include <esp_err.h>
 #include <ultrasonic_task.h>
 #define MAX_DISTANCE_CM 500 // 5m max
-QueueHandle_t stop_now_queue = NULL;
+// QueueHandle_t stop_now_queue = NULL;
+extern uint8_t stop_now;
 // 1. TASK ĐỌC CẢM BIẾN
 void ultrasonic_test(void *pvParameters)
 {
@@ -52,23 +53,21 @@ void ultrasonic_test(void *pvParameters)
             {
                 if (distance < 0.15)
                 {
-                    uint8_t signal = 1;
-                    xQueueSend(stop_now_queue, &signal, pdMS_TO_TICKS(10));
+                    stop_now = 1;
                 }
                 else
                 {
-                    uint8_t signal = 0;
-                    xQueueSend(stop_now_queue, &signal, pdMS_TO_TICKS(10));
+                    stop_now = 0;
                 }
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 
 // 2. HÀM KHỞI TẠO TỪNG CẢM BIẾN
-void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo, QueueHandle_t output_queue)
+void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo)
 {
     // Cấp phát một vùng nhớ độc lập cho cảm biến này
     ultrasonic_sensor_t *new_sensor = malloc(sizeof(ultrasonic_sensor_t));
@@ -76,8 +75,7 @@ void ultrasonic_task_init(uint8_t gpio_trigger, uint8_t gpio_echo, QueueHandle_t
     {
         printf("Loi: Khong du RAM de khoi tao cam bien!\n");
         return;
-    }
-    stop_now_queue = output_queue; // Gán Queue nhận lệnh dừng khẩn cấp từ main.c
+    } // Gán Queue nhận lệnh dừng khẩn cấp từ main.c
     // Gán thông số chân cắm vào struct
     new_sensor->trigger_pin = gpio_trigger;
     new_sensor->echo_pin = gpio_echo;
