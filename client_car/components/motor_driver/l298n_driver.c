@@ -207,7 +207,7 @@ void motor_control_task(void *pvParameters)
     QueueHandle_t command_queue = (QueueHandle_t)pvParameters;
 
     packet_control_data_t rx_packet;
-    uint32_t toc_do_xoay = 255; // Tốc độ xoay tại chỗ (nên để cao để thắng ma sát sàn)
+    uint32_t toc_do_xoay = 200; // Tốc độ xoay tại chỗ (nên để cao để thắng ma sát sàn)
 
     ESP_LOGI(TAG, "MOTOR: Task dieu khien dong co nhan packet tu Bluetooth da chay!");
 
@@ -257,27 +257,27 @@ void motor_control_task(void *pvParameters)
                     break;
 
                 case 3: // XOAY TRÁI TẠI CHỖ
-                    ESP_LOGW(TAG, "MOTOR: Đang xoay Trái 90 độ...");
+                    ESP_LOGW(TAG, "MOTOR: Đang xoay R 90 độ...");
                     // Bánh trái LÙI, Bánh phải TIẾN
-                    gpio_set_level(MOTOR_IN2_PIN, 1);
+                    gpio_set_level(MOTOR_IN2_PIN, 0);
                     gpio_set_level(MOTOR_IN4_PIN, 0);
-                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255 - toc_do_xoay * 0);
-                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, toc_do_xoay);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 100); // R
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255); // L manh
                     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-                    ESP_LOGI(TAG, "MOTOR: Đã thực hiện lệnh xoay Trái.");
+                    ESP_LOGI(TAG, "MOTOR: Đã thực hiện lệnh xoay R");
                     break;
 
                 case 4: // XOAY PHẢI TẠI CHỖ
-                    ESP_LOGW(TAG, "MOTOR: Đang xoay Phải 90 độ...");
+                    ESP_LOGW(TAG, "MOTOR: Đang xoay L 90 độ...");
                     // Bánh trái TIẾN, Bánh phải LÙI
                     gpio_set_level(MOTOR_IN2_PIN, 0);
-                    gpio_set_level(MOTOR_IN4_PIN, 1);
-                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, toc_do_xoay);
-                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 255 - toc_do_xoay * 0);
+                    gpio_set_level(MOTOR_IN4_PIN, 0);
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 255); // R
+                    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 80);  // L manh
                     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
                     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-                    ESP_LOGI(TAG, "MOTOR: Đã thực hiện lệnh xoay Phải.");
+                    ESP_LOGI(TAG, "MOTOR: Đã thực hiện lệnh xoay L.");
                     break;
 
                 default:

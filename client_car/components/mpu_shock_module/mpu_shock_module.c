@@ -36,7 +36,6 @@ void mpu_shock_task(void *pvParameters)
             // Trục Z mặc định là 1.0 (hoặc -1.0) do trọng lực Trái đất
             // Ta lấy giá trị tuyệt đối của nó trừ đi 1 để tìm gia tốc văng (Linear Accel)
             float linear_z = fabs(accel.z) - 1.0f;
-
             if (fabs(linear_z) > SHOCK_THRESHOLD)
             {
                 ESP_LOGW(TAG, "--- PHAT HIEN RUNG XOC! Z: %.2f g ---", linear_z);

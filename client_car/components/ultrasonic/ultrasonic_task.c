@@ -48,10 +48,10 @@ void ultrasonic_test(void *pvParameters)
         else
         {
             // In ra khoảng cách kèm theo tên chân cắm để biết cảm biến nào đang đọc
-            printf("[HC-SR04 | T:%d E:%d] Distance: %0.2f cm\n", t_pin, e_pin, distance * 100);
+            // printf("[HC-SR04 | T:%d E:%d] Distance: %0.2f cm\n", t_pin, e_pin, distance * 100);
             if (t_pin == 5)
             {
-                if (distance < 0.15)
+                if (distance < 0.25)
                 {
                     stop_now = 1;
                 }
@@ -62,7 +62,7 @@ void ultrasonic_test(void *pvParameters)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
